@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Campus Connect: Lost & Found (Firebase)</title>
+    <!-- Load Tailwind CDN first -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Configuration script must follow the CDN script -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-blue': '#1e3a8a', // Deep Blue (Primary)
+                        'secondary-yellow': '#fde047', // Bright Yellow (Accent/Warning)
+                        'accent-orange': '#f97316', // Orange (Lost/Danger)
+                        'danger-red': '#ef4444',
+                        'success-green': '#10b981', // Green (Success/Received)
+                        'light-gray': '#f9fafb', // Very light background
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    boxShadow: {
+                        '3xl': '0 35px 60px -15px rgba(0, 0, 0, 0.3)',
+                        'neumorphic': '5px 5px 10px #c5c5c5, -5px -5px 10px #ffffff',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom styles for better aesthetics and form focus */
+        body {
+            background-color: #f3f4f6;
+            font-family: 'Inter', sans-serif;
+        }
+        .container-card {
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            border: none;
+        }
+        .form-input:focus {
+            outline: none;
+            border-color: #1e3a8a;
+            box-shadow: 0 0 0 3px rgba(30, 58, 138, 0.2);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4">
+
+    <!-- Firebase SDK Imports (CDN) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
+        import { getFirestore, doc, setDoc, addDoc, onSnapshot, collection, query, where, writeBatch, getDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+        
+        // --- GLOBAL VARIABLES & INITIALIZATION ---
+
+        // CRITICAL: Hardcoded Configuration Object (Your valid key/IDs)
+        const firebaseConfig = {
+            // NOTE: I am using the key from your previous successful paste
+            apiKey: "AIzaSyACjzlT5twx8t0-GoFY9aQ0oFdLXeO5BKw",
+            authDomain: "dt-prototype-a5373.firebaseapp.com",
+            projectId: "dt-prototype-a5373",
+            storageBucket: "dt-prototype-a5373.appspot.com",
+            messagingSenderId: "274038015290",
+            appId: "1:274038015290:web:350758f68aa94e8b7b7c03",
+            measurementId: "G-YEB9DTS7YB"
+        };
+        
+        // FIX: Define initialAuthToken as null to satisfy the logic check without crashing.
+        const initialAuthToken = null; 
+        
+        let app;
+        let auth;
+        let db;
+        let userId = null;
+        window.isAuthReady = false; 
+
+        // Placeholder URL for the Flask Backend (must be updated after Cloud Run deployment)
+        const API_BASE_URL = 'https://lostnfound-iroa.onrender.com';
+        let currentUserUIC = localStorage.getItem('userUic') || '';
+
+        // --- AUTHENTICATION & INITIALIZATION LOGIC ---
+
+        function initFirebase() {
+            if (!firebaseConfig.apiKey) {
+                console.error("CRITICAL: Firebase Initialization failed. API Key is missing.");
+                return;
+            }
+
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                console.log("Firebase Initialized.");
+                
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        console.log("User authenticated:", userId);
+                    } else {
+                        console.log("User logged out or not yet signed in. Attempting Anonymous Sign-in...");
+                        try {
+                            // This is the clean structure that avoids ReferenceErrors
+                            if (!user) {
+                                await signInAnonymously(auth);
+                                console.log("Anonymous Sign-in successful.");
+                            }
+                        } catch (error) {
+                            console.error("CRITICAL: Firebase Auth Sign-In Failed! Check Auth settings in Firebase Console.", error);
+                        }
+                    }
+                    window.isAuthReady = true;
+                    if (document.readyState === 'complete') {
+                        if (currentUserUIC) {
+                            navigateTo('dashboard');
+                        } else {
+                            navigateTo('registration');
+                        }
+                    }
+                });
+
+            } catch (e) {
+                console.error("Firebase SDK Load/Init Error:", e);
+                window.isAuthReady = true;
+            }
+        }
+        
+        initFirebase();
+
+
+        // Global functions exposed to the window for event handlers
+        window.navigateTo = navigateTo;
+        window.logout = logout;
+        window.handleLogin = handleLogin;
+        window.setupPushNotifications = setupPushNotifications;
+        window.currentUserUIC = currentUserUIC;
+        window.API_BASE_URL = API_BASE_URL;
+
+        // --- Core Firestore Utility Functions ---
+
+        /** Constructs the collection reference for public data. */
+        function getCollectionRef(collectionName) {
+            // Uses projectId, which is correctly defined in firebaseConfig
+            return collection(db, `artifacts/${firebaseConfig.projectId}/public/data/${collectionName}`);
+        }
+
+        /** Utility for displaying messages */
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast-message');
+            toast.textContent = message;
+            toast.className = `fixed bottom-5 right-5 z-50 p-4 rounded-xl shadow-xl text-white transition-opacity duration-300 opacity-100`;
+
+            if (type === 'success') {
+                toast.classList.add('bg-success-green');
+            } else if (type === 'error') {
+                toast.classList.add('bg-danger-red');
+            } else {
+                toast.classList.add('bg-primary-blue');
+            }
+
+            toast.classList.remove('hidden');
+
+            setTimeout(() => {
+                toast.classList.remove('opacity-100');
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.classList.add('hidden'), 300);
+            }, 3000);
+        }
+
+        // --- Navigation and View Management ---
+        const views = {
+            'registration': renderRegistration,
+            'lost': renderLostItemForm,
+            'dashboard': renderDashboard,
+            'found': renderFoundItemForm
+        };
+
+        function navigateTo(page) {
+            if (!window.isAuthReady) {
+                document.getElementById('app-container').innerHTML = `<div class="flex justify-center items-center h-48"><div class="animate-spin rounded-full h-16 w-16 border-b-2 border-primary-blue"></div><p class="ml-4 text-primary-blue">Initializing database...</p></div>`;
+                return;
+            }
+
+            const container = document.getElementById('app-container');
+            container.innerHTML = `<div class="flex justify-center items-center h-48"><div class="animate-spin rounded-full h-16 w-16 border-b-2 border-primary-blue"></div></div>`;
+            
+            // Show/hide logout button based on login status
+            const logoutButton = document.getElementById('logout-button');
+            if (currentUserUIC) {
+                logoutButton.classList.remove('hidden');
+            } else {
+                logoutButton.classList.add('hidden');
+            }
+
+            if (views[page]) {
+                views[page]();
+            } else {
+                container.innerHTML = `<h2 class="text-danger-red text-center text-xl">404: Page not found.</h2>`;
+            }
+        }
+
+        function logout() {
+            currentUserUIC = '';
+            localStorage.removeItem('userUic');
+            showToast('You have been logged out.', 'info');
+            navigateTo('registration');
+        }
+
+        // --- View 1: Registration and UIC Generation ---
+        function renderRegistration() {
+            const container = document.getElementById('app-container');
+            container.innerHTML = `
+                <h2 class="text-3xl font-extrabold text-primary-blue mb-6 border-b-2 pb-2 border-secondary-yellow">Student Registration & UIC</h2>
+                <p class="text-gray-600 mb-8">Get your Unique Identification Code (UIC) to track your lost items on campus.</p>
+                <form id="registration-form" class="space-y-6">
+                    <div>
+                        <label for="name" class="block text-sm font-medium text-gray-700">Full Name</label>
+                        <input type="text" id="name" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 form-input">
+                    </div>
+                    <div>
+                        <label for="year" class="block text-sm font-medium text-gray-700">Year of Engineering/Faculty</label>
+                        <select id="year" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 form-input bg-white">
+                            <option value="">Select Year/Faculty</option>
+                            <option value="First Year">First Year (FE)</option>
+                            <option value="Second Year">Second Year (SE)</option>
+                            <option value="Third Year">Third Year (TE)</option>
+                            <option value="Final Year">Final Year (BE)</option>
+                            <option value="Masters">Masters/PG</option>
+                            <option value="Faculty">Faculty/Staff</option>
+                        </select>
+                    </div>
+                    <button type="submit" id="reg-submit-btn" class="w-full py-3 px-4 border border-transparent rounded-lg shadow-lg text-lg font-medium text-white bg-success-green hover:bg-green-700 transition duration-150 transform hover:scale-[1.01] active:scale-95">
+                        Generate My UIC
+                    </button>
+                </form>
+            `;
+
+            document.getElementById('registration-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = document.getElementById('reg-submit-btn');
+                btn.disabled = true;
+                btn.textContent = 'Registering...';
+
+                const form = e.target;
+                const name = form.name.value;
+                const year = form.year.value;
+                const faculty = year; 
+                const usersCollectionRef = getCollectionRef('users');
+                
+                // CRITICAL: Ensure auth is ready before accessing Firestore
+                if (!auth || !auth.currentUser) {
+                     showToast('Authentication not ready. Please refresh.', 'error');
+                     btn.disabled = false;
+                     btn.textContent = 'Generate My UIC';
+                     return;
+                }
+
+                try {
+                    // 1. Generate unique 6-digit UIC (Client-side simulation with database check)
+                    let uic;
+                    let isUnique = false;
+                    
+                    for (let i = 0; i < 10; i++) { // Limit attempts to prevent loops
+                        uic = String(Math.floor(100000 + Math.random() * 900000));
+                        // Check for existence using the indexed query
+                        const q = query(usersCollectionRef, where("uic", "==", uic));
+                        const snapshot = await getDocs(q);
+                        if (snapshot.empty) {
+                            isUnique = true;
+                            break;
+                        }
+                    }
+
+                    if (!isUnique) {
+                        showToast("Could not generate a unique UIC after several attempts. Please try again.", 'error');
+                        return;
+                    }
+
+                    // 2. Save user data to Firestore
+                    // Use the UIC as the document ID for efficient lookup
+                    await setDoc(doc(usersCollectionRef, uic), {
+                        uic: uic,
+                        name: name,
+                        year: year,
+                        faculty: faculty,
+                        createdAt: new Date().toISOString(),
+                        subscriptions: []
+                    });
+
+                    currentUserUIC = uic;
+                    localStorage.setItem('userUic', currentUserUIC);
+                    showToast(`Welcome ${name}! Your UIC is ${currentUserUIC}.`, 'success');
+                    
+                    // Show the UIC prominently and navigate to dashboard prompt
+                    container.innerHTML = `
+                        <div class="text-center py-12 bg-primary-blue/5 rounded-xl border-4 border-primary-blue/20 shadow-lg">
+                            <h3 class="text-4xl font-extrabold text-success-green mb-2">Registration Complete!</h3>
+                            <p class="text-xl text-gray-700 mb-6">Your Unique Identification Code is:</p>
+                            <div class="bg-white inline-block px-10 py-5 rounded-2xl shadow-2xl border-4 border-primary-blue transform hover:scale-[1.05] transition-transform duration-300 cursor-copy" 
+                                onclick="navigator.clipboard.writeText('${currentUserUIC}').then(() => showToast('UIC copied to clipboard!', 'info')).catch(err => showToast('Failed to copy. Try manually.', 'error'))">
+                                <span class="text-6xl font-black text-primary-blue tracking-wider">${currentUserUIC}</span>
+                            </div>
+                            <p class="mt-4 text-gray-500 text-sm">Click the code to copy it. Keep this code secure!</p>
+                            <button onclick="navigateTo('dashboard')" class="mt-8 py-3 px-6 bg-primary-blue text-white font-semibold rounded-lg shadow-md hover:bg-blue-800 transition transform hover:scale-[1.05]">
+                                Go to Dashboard
+                            </button>
+                            <div class="mt-6 text-sm text-primary-blue cursor-pointer font-medium hover:text-blue-700" onclick="setupPushNotifications('${currentUserUIC}')">
+                                Click here to enable Lost Item Alerts! 🔔
+                            </div>
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error('Registration/Firestore SetDoc Failed:', error);
+                    showToast(`Registration failed: ${error.code || error.message}. Check console.`, 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Generate My UIC';
+                }
+            });
+        }
+
+        // --- View 2: Report Lost Item (Firestore) ---
+        function renderLostItemForm() {
+            if (!currentUserUIC) {
+                return promptLogin('lost');
+            }
+
+            const container = document.getElementById('app-container');
+            container.innerHTML = `
+                <h2 class="text-3xl font-extrabold text-primary-blue mb-6 border-b-2 pb-2 border-secondary-yellow">Report a Lost Item</h2>
+                <p class="text-gray-600 mb-8">Provide as much detail as possible to help the finder identify your item. Your UIC is automatically attached.</p>
+                <form id="lost-item-form" class="space-y-6 p-6 bg-light-gray rounded-xl shadow-inner">
+                    <div class="bg-accent-orange/10 p-4 rounded-lg border border-accent-orange">
+                        <p class="text-lg font-semibold text-accent-orange">Your UIC: <span class="font-mono">${currentUserUIC}</span></p>
+                        <input type="hidden" id="lost-uic" value="${currentUserUIC}">
+                    </div>
+                    <div>
+                        <label for="description" class="block text-sm font-medium text-gray-700">Item Description (e.g., 'Red Backpack', 'Apple Airpods')</label>
+                        <input type="text" id="description" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 form-input">
+                    </div>
+                    <div>
+                        <label for="details" class="block text-sm font-medium text-gray-700">Finer Details (Brand, specific contents, scratch marks - Be unique!)</label>
+                        <textarea id="details" rows="4" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 form-input"></textarea>
+                    </div>
+                    <button type="submit" id="lost-submit-btn" class="w-full py-3 px-4 border border-transparent rounded-lg shadow-lg text-lg font-medium text-white bg-accent-orange hover:bg-orange-600 transition duration-150 transform hover:scale-[1.01] active:scale-95">
+                        Submit Lost Query
+                    </button>
+                </form>
+            `;
+
+            document.getElementById('lost-item-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = document.getElementById('lost-submit-btn');
+                btn.disabled = true;
+                btn.textContent = 'Submitting...';
+
+                const form = e.target;
+                const uic = form['lost-uic'].value;
+                const description = form.description.value;
+                const details = form.details.value;
+                const lostItemsCollectionRef = getCollectionRef('lost_items');
+
+                try {
+                    await addDoc(lostItemsCollectionRef, {
+                        uic: uic,
+                        description: description,
+                        details: details,
+                        status: 'Lost',
+                        timestamp: new Date().toISOString()
+                    });
+
+                    showToast(`Lost item (${description}) submitted successfully!`, 'success');
+                    navigateTo('dashboard');
+                } catch (error) {
+                    console.error('Lost submission/Firestore error:', error);
+                    showToast('Database error. Could not submit lost item.', 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Submit Lost Query';
+                }
+            });
+        }
+
+        // --- View 3: User Dashboard (Firestore Realtime) ---
+        function renderDashboard() {
+            if (!currentUserUIC) {
+                return promptLogin('dashboard');
+            }
+
+            const container = document.getElementById('app-container');
+            container.innerHTML = `
+                <h2 class="text-3xl font-extrabold text-primary-blue mb-4 border-b-2 pb-2 border-secondary-yellow">My Dashboard</h2>
+                <div id="user-info" class="bg-primary-blue text-white p-5 rounded-xl mb-8 shadow-md">
+                    <p class="text-2xl font-bold">Loading User Info...</p>
+                    <p class="text-lg opacity-80">UIC: <span class="font-mono bg-white/20 px-2 py-1 rounded">${currentUserUIC}</span></p>
+                </div>
+                <h3 class="text-2xl font-semibold text-gray-800 border-b pb-2 mb-4">Lost Item Status</h3>
+                <div id="lost-items-list" class="space-y-4">
+                    <p class="text-center text-gray-500">Loading lost items...</p>
+                </div>
+                <div class="mt-8 text-center">
+                    <button onclick="setupPushNotifications('${currentUserUIC}')" class="py-2 px-4 bg-secondary-yellow text-primary-blue font-semibold rounded-full shadow-md hover:bg-yellow-400 transition transform hover:scale-[1.05]">
+                        Manage Notification Alerts 🔔
+                    </button>
+                </div>
+            `;
+
+            fetchDashboardData(currentUserUIC);
+        }
+
+        async function fetchDashboardData(uic) {
+            const userInfoDiv = document.getElementById('user-info');
+            const lostItemsDiv = document.getElementById('lost-items-list');
+
+            const usersCollectionRef = getCollectionRef('users');
+            const lostItemsCollectionRef = getCollectionRef('lost_items');
+
+            // 1. Fetch User Info (for name/year)
+            try {
+                const userDocRef = doc(usersCollectionRef, uic);
+                const userSnapshot = await getDoc(userDocRef); 
+                
+                if (userSnapshot.exists()) {
+                    const user = userSnapshot.data();
+                    userInfoDiv.innerHTML = `
+                        <p class="text-2xl font-bold">${user.name}</p>
+                        <p class="text-lg opacity-80">UIC: <span class="font-mono bg-white/20 px-2 py-1 rounded">${currentUserUIC}</span></p>
+                        <p class="text-md opacity-80">${user.year} | ${user.faculty}</p>
+                    `;
+                } else {
+                    userInfoDiv.innerHTML = `<p class="text-danger-red">User data not found for UIC: ${uic}</p>`;
+                    return;
+                }
+            } catch (error) {
+                console.error('User data fetch error:', error);
+                userInfoDiv.innerHTML = `<p class="text-danger-red">Error fetching user data.</p>`;
+            }
+
+            // 2. Set up Real-time listener for Lost Items
+            const q = query(lostItemsCollectionRef, where("uic", "==", uic));
+            
+            onSnapshot(q, (snapshot) => {
+                const items = [];
+                snapshot.forEach(doc => {
+                    items.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // Sort by timestamp (newest first, if available)
+                items.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+
+                if (items.length === 0) {
+                    lostItemsDiv.innerHTML = `<p class="text-center text-gray-500 py-8">You have not reported any lost items yet. Use the "Report Lost" tab!</p>`;
+                } else {
+                    lostItemsDiv.innerHTML = items.map(item => {
+                        const isReceived = item.status === 'Received';
+                        const statusColor = isReceived ? 'bg-success-green' : 'bg-accent-orange';
+                        const cardBg = isReceived ? 'bg-green-50 border-success-green/50' : 'bg-accent-orange/10 border-accent-orange/50';
+                        const statusText = isReceived ? 'Received! 🎉' : 'Still Lost... ⏳';
+                        
+                        return `
+                            <div class="p-4 rounded-xl shadow-md border ${cardBg} flex justify-between items-center transition duration-300 hover:shadow-lg">
+                                <div>
+                                    <p class="text-lg font-semibold text-gray-900">${item.description}</p>
+                                    <p class="text-sm text-gray-600 italic">${item.details}</p>
+                                </div>
+                                <span class="px-3 py-1 text-sm font-bold text-white rounded-full ${statusColor} shadow-md">
+                                    ${statusText}
+                                </span>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }, (error) => {
+                console.error("Lost items listener error:", error);
+                lostItemsDiv.innerHTML = `<p class="text-danger-red">Error fetching lost items: ${error.message}</p>`;
+            });
+        }
+
+        // --- View 4: Report Found Item (Firestore Transaction/Batch) ---
+        function renderFoundItemForm() {
+            const container = document.getElementById('app-container');
+            container.innerHTML = `
+                <h2 class="text-3xl font-extrabold text-primary-blue mb-6 border-b-2 pb-2 border-secondary-yellow">Report a Found Item</h2>
+                <p class="text-gray-600 mb-8">You're a campus hero! Please enter the owner's UIC and the secure drop-off location.</p>
+                <form id="found-item-form" class="space-y-6 p-6 bg-light-gray rounded-xl shadow-inner">
+                    <div class="bg-primary-blue/10 p-4 rounded-lg border border-primary-blue">
+                        <p class="text-lg font-semibold text-primary-blue">Help reunite an item with its owner!</p>
+                    </div>
+                    <div>
+                        <label for="owner_uic" class="block text-sm font-medium text-gray-700">Owner's UIC (Unique Identification Code)</label>
+                        <input type="text" id="owner_uic" required maxlength="6" pattern="[0-9]{6}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 form-input" placeholder="E.g., 123456">
+                        <p class="xs text-gray-500 mt-1">This is usually found on a tag, ID card, or sticker.</p>
+                    </div>
+                    <div>
+                        <label for="drop_off_location" class="block text-sm font-medium text-gray-700">Drop-off Location</label>
+                        <select id="drop_off_location" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 form-input bg-white">
+                            <option value="">Select Drop-off Location</option>
+                            <option value="Main Security Gate">Main Security Gate</option>
+                            <option value="Library Front Desk">Library Front Desk</option>
+                            <option value="Admin Office (2nd Floor)">Admin Office (2nd Floor)</option>
+                            <option value="Cafeteria Lost & Found">Cafeteria Lost & Found</option>
+                        </select>
+                    </div>
+                    <button type="submit" id="found-submit-btn" class="w-full py-3 px-4 border border-transparent rounded-lg shadow-lg text-lg font-medium text-white bg-success-green hover:bg-green-700 transition duration-150 transform hover:scale-[1.01] active:scale-95">
+                        Confirm Drop-off & Notify Owner
+                    </button>
+                </form>
+            `;
+
+            document.getElementById('found-item-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = document.getElementById('found-submit-btn');
+                btn.disabled = true;
+                btn.textContent = 'Processing...';
+
+                const form = e.target;
+                const owner_uic = form.owner_uic.value;
+                const drop_off_location = form.drop_off_location.value;
+
+                const usersCollectionRef = getCollectionRef('users');
+                const lostItemsCollectionRef = getCollectionRef('lost_items');
+
+                try {
+                    // 1. Check if UIC exists
+                    const userDocRef = doc(usersCollectionRef, owner_uic);
+                    const userSnapshot = await getDoc(userDocRef); 
+                    
+                    if (!userSnapshot.exists()) {
+                        showToast("Owner UIC not found in the system. Please recheck.", 'error');
+                        return;
+                    }
+                    const ownerName = userSnapshot.data().name;
+
+                    // 2. Find all LOST items for that UIC
+                    const lostQuery = query(lostItemsCollectionRef, where("uic", "==", owner_uic), where("status", "==", "Lost"));
+                    const lostSnapshot = await getDocs(lostQuery);
+                    
+                    if (lostSnapshot.empty) {
+                         showToast(`UIC ${owner_uic} has no items currently marked as 'Lost'. Thank you for your efforts!`, 'info');
+                         form.reset();
+                         return;
+                    }
+                    
+                    // 3. Use a Batch Write to update all found items
+                    const batch = writeBatch(db);
+                    let itemsUpdated = 0;
+
+                    lostSnapshot.forEach((docSnap) => {
+                        batch.set(doc(lostItemsCollectionRef, docSnap.id), {
+                            ...docSnap.data(),
+                            status: 'Received',
+                            receivedLocation: drop_off_location,
+                            receivedTimestamp: new Date().toISOString()
+                        });
+                        itemsUpdated++;
+                    });
+                    
+                    await batch.commit();
+
+                    // 4. Trigger push notification (via Flask backend stub)
+                    const pushResponse = await fetch(`${API_BASE_URL}/send_push_notification`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            uic: owner_uic,
+                            message: `🎉 Your item has been found! Head to ${drop_off_location} to collect it.`
+                        })
+                    });
+                    const pushResult = await pushResponse.json();
+                    
+                    showToast(`Thank you! We've notified ${ownerName} (UIC: ${owner_uic}) that their ${itemsUpdated} item(s) are at ${drop_off_location}.`, 'success');
+                    form.reset();
+
+                } catch (error) {
+                    console.error('Found submission/Firestore error:', error);
+                    showToast('Database error. Could not report found item.', 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Confirm Drop-off & Notify Owner';
+                }
+            });
+        }
+
+        // --- General Helper: Login Prompt ---
+        function promptLogin(nextPage) {
+            const container = document.getElementById('app-container');
+            container.innerHTML = `
+                <div class="text-center py-12 border-4 border-primary-blue rounded-xl bg-primary-blue/10 p-6 shadow-xl">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-primary-blue mb-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                    </svg>
+                    <h3 class="text-2xl font-bold text-primary-blue mb-2">Access Required</h3>
+                    <p class="text-gray-700 mb-4">Please enter your UIC to access the ${nextPage} page.</p>
+                    <input type="text" id="login-uic" maxlength="6" pattern="[0-9]{6}" class="p-3 border rounded-lg shadow-md text-center text-xl font-mono form-input" placeholder="Your 6-Digit UIC">
+                    <button onclick="handleLogin('${nextPage}')" class="mt-4 w-full md:w-auto py-3 px-6 bg-primary-blue text-white font-semibold rounded-lg shadow-lg hover:bg-blue-800 transition transform hover:scale-[1.05]">
+                        Login
+                    </button>
+                    <p class="mt-4 text-sm text-gray-500">Don't have a UIC? <span onclick="navigateTo('registration')" class="text-primary-blue font-semibold cursor-pointer hover:underline">Register here.</span></p>
+                </div>
+            `;
+        }
+
+        function handleLogin(nextPage) {
+            const uicInput = document.getElementById('login-uic');
+            const uic = uicInput.value;
+
+            if (uic && uic.length === 6 && !isNaN(uic)) {
+                currentUserUIC = uic;
+                localStorage.setItem('userUic', currentUserUIC);
+                showToast(`Logged in as UIC ${currentUserUIC}.`, 'info');
+                navigateTo(nextPage);
+            } else {
+                showToast('Please enter a valid 6-digit UIC.', 'error');
+            }
+        }
+
+
+        // --- PUSH NOTIFICATION LOGIC (Frontend Stub) ---
+
+        const applicationServerKey = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMgvXXy9P53pULNw5oJJChgQ7Z1Af//QlVRlalc5TBThBr7qCmtM+J2aNS7u2SnZVsfGHE8id7P8166fbPvzbQg==';
+
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding)
+                .replace(/\-/g, '+')
+                .replace(/_/g, '/');
+
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        async function setupPushNotifications(uic) {
+            if (!('serviceWorker' in navigator)) {
+                showToast('Push notifications not supported by your browser.', 'error');
+                return;
+            }
+
+            if (Notification.permission === 'denied') {
+                showToast('Notifications are blocked by your browser settings.', 'error');
+                return;
+            }
+            
+            showToast('Attempting to register service worker and subscribe...', 'info');
+
+            try {
+                // Mock registration object for local testing
+                const registration = {
+                    ready: true,
+                    pushManager: {
+                        subscribe: async (options) => {
+                            console.log("Simulating Push Subscription...");
+                            return {
+                                endpoint: 'https://mock-endpoint.com/v2/',
+                                getKey: (key) => new Uint8Array(16).fill(key.charCodeAt(0) || 0),
+                                toJSON: () => ({
+                                    endpoint: 'https://mock-endpoint.com/v2/',
+                                    expirationTime: null,
+                                    keys: {
+                                        p256dh: btoa(String.fromCharCode(...new Uint8Array(16))),
+                                        auth: btoa(String.fromCharCode(...new Uint8Array(16)))
+                                    }
+                                })
+                            };
+                        }
+                    }
+                };
+
+                // 2. Request permission if not granted
+                if (Notification.permission !== 'granted') {
+                    const permission = await Notification.requestPermission();
+                    if (permission !== 'granted') {
+                        showToast('Permission to show notifications denied.', 'error');
+                        return;
+                    }
+                }
+
+                // 3. Subscribe the user
+                const subscribeOptions = {
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(applicationServerKey)
+                };
+
+                const subscription = await registration.pushManager.subscribe(subscribeOptions);
+
+                // 4. Send the subscription object to the server
+                const response = await fetch(`${API_BASE_URL}/subscribe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        uic: uic,
+                        subscription: subscription.toJSON()
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    showToast('Lost Item Alerts Activated! You will be notified when your item is found.', 'success');
+                } else {
+                    showToast(`Subscription failed: ${result.message}`, 'error');
+                }
+
+            } catch (error) {
+                console.error('Push setup failed:', error);
+                showToast('Failed to set up notifications (check console).', 'error');
+            }
+        }
+
+    </script>
+
+    <!-- HTML Structure -->
+    <header class="w-full max-w-4xl bg-gradient-to-r from-primary-blue to-blue-900 p-4 rounded-xl shadow-xl mb-6 flex justify-between items-center">
+        <h1 class="text-2xl font-black text-secondary-yellow flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10 2a8 8 0 100 16 8 8 0 000-16zM8.324 13.92a.5.5 0 00.103.525l2.484 2.484a.5.5 0 00.707 0l2.484-2.484a.5.5 0 00.103-.525.5.5 0 00-.414-.14H13a.5.5 0 000-1H7a.5.5 0 000 1h-.5a.5.5 0 00-.414.14zM10 3.5a1 1 0 110 2 1 1 0 010-2z" />
+            </svg>
+            Campus Connect
+        </h1>
+        <nav class="flex space-x-2">
+            <button onclick="navigateTo('registration')" class="px-3 py-1 text-sm rounded-lg text-white bg-primary-blue/30 hover:bg-primary-blue/50 transition transform hover:scale-105">Register</button>
+            <button onclick="navigateTo('dashboard')" class="px-3 py-1 text-sm rounded-lg text-white bg-primary-blue/30 hover:bg-primary-blue/50 transition transform hover:scale-105">Dashboard</button>
+            <button onclick="navigateTo('lost')" class="px-3 py-1 text-sm rounded-lg text-white bg-accent-orange hover:bg-orange-600 transition transform hover:scale-105 shadow-md">Report Lost</button>
+            <button onclick="navigateTo('found')" class="px-3 py-1 text-sm rounded-lg text-white bg-success-green hover:bg-green-600 transition transform hover:scale-105 shadow-md">Report Found</button>
+            <button id="logout-button" onclick="logout()" class="px-3 py-1 text-sm rounded-lg font-semibold text-white bg-danger-red hover:bg-red-700 transition hidden shadow-md">Logout</button>
+        </nav>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="app-container" class="w-full max-w-4xl bg-white p-6 md:p-10 rounded-xl container-card">
+        <div class="flex justify-center items-center h-48">
+            <div class="animate-spin rounded-full h-16 w-16 border-b-4 border-primary-blue"></div>
+            <p class="ml-4 text-primary-blue font-medium">Initializing application...</p>
+        </div>
+    </main>
+    
+    <!-- Toast/Notification Message Area -->
+    <div id="toast-message" class="fixed bottom-5 right-5 z-50 p-4 rounded-lg shadow-xl text-white transition-opacity duration-300 opacity-0 hidden"></div>
+
+    <!-- Initial Load (Wait for Firebase Auth) -->
+    <script type="module">
+        window.onload = () => {
+            if (window.isAuthReady) {
+                if (currentUserUIC) {
+                    navigateTo('dashboard');
+                } else {
+                    navigateTo('registration');
+                }
+            }
+        };
+    </script>
+</body>
+</html>
