@@ -79,7 +79,7 @@
         window.isAuthReady = false; 
 
         // Placeholder URL for the Flask Backend (must be updated after Cloud Run deployment)
-        const API_BASE_URL = 'https://lostnfound-iroa.onrender.com';
+        const API_BASE_URL = 'https://lost-found-10u2.onrender.com';
         let currentUserUIC = localStorage.getItem('userUic') || '';
 
         // --- AUTHENTICATION & INITIALIZATION LOGIC ---
@@ -620,7 +620,7 @@
 
         // --- PUSH NOTIFICATION LOGIC (Frontend Stub) ---
 
-        const applicationServerKey = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMgvXXy9P53pULNw5oJJChgQ7Z1Af//QlVRlalc5TBThBr7qCmtM+J2aNS7u2SnZVsfGHE8id7P8166fbPvzbQg==';
+        const applicationServerKey = 'BLmzkIXG5ClilX89HV7WnoGo5alDiw5G4C8PW0Y2GykbEfuovNoj6_5wSmhv5vng-3GTnY8tP_KcLSTfpbzHn8c';
 
         function urlBase64ToUint8Array(base64String) {
             const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -637,7 +637,7 @@
             return outputArray;
         }
 
-        async function setupPushNotifications(uic) {
+      /*  async function setupPushNotifications(uic) {
             if (!('serviceWorker' in navigator)) {
                 showToast('Push notifications not supported by your browser.', 'error');
                 return;
@@ -711,7 +711,68 @@
                 console.error('Push setup failed:', error);
                 showToast('Failed to set up notifications (check console).', 'error');
             }
+        }*/
+
+        // Replacement for: async function setupPushNotifications(uic) { ... }
+
+async function setupPushNotifications(uic) {
+    if (!('serviceWorker' in navigator)) {
+        showToast('Push notifications not supported by your browser.', 'error');
+        return;
+    }
+
+    if (Notification.permission === 'denied') {
+        showToast('Notifications are blocked. Please unblock them in your browser settings.', 'error');
+        return;
+    }
+    
+    showToast('Enabling notifications...', 'info');
+
+    try {
+        // --- STEP 1: REAL SERVICE WORKER REGISTRATION (This finds sw.js) ---
+        const registration = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+
+        // 2. Unsubscribe from any existing subscription (CRITICAL to fix old VAPID keys)
+        const existingSubscription = await registration.pushManager.getSubscription();
+        if (existingSubscription) {
+             await existingSubscription.unsubscribe(); 
         }
+
+        // 3. Subscribe the user using the VAPID public key
+        const subscribeOptions = {
+            userVisibleOnly: true,
+            // NOTE: Your current applicationServerKey is the MFkw... string.
+            // If this fails, the key format is the issue.
+            applicationServerKey: urlBase64ToUint8Array(applicationServerKey)
+        };
+        const subscription = await registration.pushManager.subscribe(subscribeOptions);
+
+
+        // 4. Send the new subscription object to your Render backend
+        const response = await fetch(`${API_BASE_URL}/subscribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                uic: uic,
+                subscription: subscription.toJSON()
+            })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            showToast('Alerts Enabled! You will be notified when your item is found.', 'success');
+        } else {
+            showToast(`Subscription failed: ${result.message}`, 'error');
+        }
+
+    } catch (error) {
+        console.error('Push setup failed:', error);
+        showToast('Failed to set up notifications. Check console.', 'error');
+    }
+}
+
+        
 
     </script>
 
