@@ -147,7 +147,7 @@ def send_push_notification(uic, message):
                 data=json.dumps({"title": "Item Found!", "body": message}),
                 # CRITICAL: Use the correct Public and Private Keys here
                 vapid_private_key=VAPID_PRIVATE_KEY,
-                vapid_public_key=VAPID_PUBLIC_KEY,
+                vapid_public_key=VAPID_PUBLIC_KEY, 
                 vapid_claims=VAPID_CLAIMS
             )
             print(f"Push Sent to {uic} successfully. Status: {response.status_code}")
