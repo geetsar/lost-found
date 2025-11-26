@@ -100,7 +100,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 # --- CRITICAL CONFIGURATION (REPLACE WITH YOUR REAL GENERATED KEYS!) ---
 # NOTE: Keys must be the shorter, URL-Safe Base64 format (from vapidkeys.com)
-VAPID_CLAIMS = {
+'''VAPID_CLAIMS = {
     "sub": "mailto:geetanjali.30.01.06@gmail.com"  # Use your real email address
 }
 VAPID_PRIVATE_KEY = (
@@ -111,7 +111,22 @@ VAPID_PRIVATE_KEY = (
 "-----END EC PRIVATE KEY-----"
 )  # PASTE THE PRIVATE KEY HERE
 VAPID_PUBLIC_KEY = "BLmzkIXG5ClilX89HV7WnoGo5alDiw5G4C8PW0Y2GykbEfuovNoj6_5wSmhv5vng-3GTnY8tP_KcLSTfpbzHn8c"    # PASTE THE PUBLIC KEY HERE
+'''
+VAPID_CLAIMS = {
+    "sub": "mailto:geetanjali.30.01.06@gmail.com"  # Your real email address
+}
 
+# FIX: Public Key (Used in both frontend and backend function call)
+VAPID_PUBLIC_KEY = "BLmzkIXG5ClilX89HV7WnoGo5alDiw5G4C8PW0Y2GykbEfuovNoj6_5wSmhv5vng-3GTnY8tP_KcLSTfpbzHn8c"    
+
+# FIX: Private Key MUST be the full PEM block (for signing headers correctly)
+VAPID_PRIVATE_KEY = (
+    "-----BEGIN EC PRIVATE KEY-----\n" # FIX: Added newline after BEGIN header
+    "MHcCAQEEIOAEzxyPHGX4G27D9siGqP+f5w8lwpQCA2VwHNzA9b/+oAoGCCqGSM49\n"
+    "AwEHoUQDQgAEMgvXXy9P53pULNw5oJJChgQ7Z1Af//QlVRlalc5TBThBr7qCmtM+\n"
+    "J2aNS7u2SnZVsfGHE8id7P8166fbPvzbQg==\n"
+    "-----END EC PRIVATE KEY-----" # FIX: This line needs to be its own block
+)
 # --- Mock Subscription Database (In-memory storage) ---
 user_subscriptions = {}
 
