@@ -103,7 +103,13 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 VAPID_CLAIMS = {
     "sub": "mailto:geetanjali.30.01.06@gmail.com"  # Use your real email address
 }
-VAPID_PRIVATE_KEY = "pWNpNDrFUkS1ZcCclRM0I1FgYHB2UXh3i9GUPXrDudY"  # PASTE THE PRIVATE KEY HERE
+VAPID_PRIVATE_KEY = (
+    "-----BEGIN EC PRIVATE KEY-----"
+"MHcCAQEEIOAEzxyPHGX4G27D9siGqP+f5w8lwpQCA2VwHNzA9b/+oAoGCCqGSM49 \n"
+"AwEHoUQDQgAEMgvXXy9P53pULNw5oJJChgQ7Z1Af//QlVRlalc5TBThBr7qCmtM+ \n"
+"J2aNS7u2SnZVsfGHE8id7P8166fbPvzbQg== \n"
+"-----END EC PRIVATE KEY-----"
+)  # PASTE THE PRIVATE KEY HERE
 VAPID_PUBLIC_KEY = "BLmzkIXG5ClilX89HV7WnoGo5alDiw5G4C8PW0Y2GykbEfuovNoj6_5wSmhv5vng-3GTnY8tP_KcLSTfpbzHn8c"    # PASTE THE PUBLIC KEY HERE
 
 # --- Mock Subscription Database (In-memory storage) ---
